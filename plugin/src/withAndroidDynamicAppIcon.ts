@@ -43,30 +43,43 @@ const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
     function addIconActivityAlias(config: any[]): any[] {
       return [
         ...config,
-        ...iconNames.map((iconName) => ({
-          $: {
+        ...iconNames.map((iconName) => {
+          const iconSrc = icons[iconName];
+          const isAdaptiveIcon =
+            typeof iconSrc === "object" && iconSrc !== null;
+
+          const activityAliasAttributes: any = {
             "android:name": `${iconNamePrefix}${iconName}`,
             "android:enabled": "false",
             "android:exported": "true",
             "android:icon": `@mipmap/${iconName}`,
             "android:targetActivity": ".MainActivity",
-            "android:roundIcon": `@mipmap/${iconName}_round`,
-          },
-          "intent-filter": [
-            ...(mainActivity["intent-filter"] || [
-              {
-                action: [
-                  { $: { "android:name": "android.intent.action.MAIN" } },
-                ],
-                category: [
-                  {
-                    $: { "android:name": "android.intent.category.LAUNCHER" },
-                  },
-                ],
-              },
-            ]),
-          ],
-        })),
+          };
+
+          // Only add roundIcon if it's an AdaptiveIcon
+          if (isAdaptiveIcon) {
+            activityAliasAttributes["android:roundIcon"] =
+              `@mipmap/${iconName}_round`;
+          }
+
+          return {
+            $: activityAliasAttributes,
+            "intent-filter": [
+              ...(mainActivity["intent-filter"] || [
+                {
+                  action: [
+                    { $: { "android:name": "android.intent.action.MAIN" } },
+                  ],
+                  category: [
+                    {
+                      $: { "android:name": "android.intent.category.LAUNCHER" },
+                    },
+                  ],
+                },
+              ]),
+            ],
+          };
+        }),
       ];
     }
 
