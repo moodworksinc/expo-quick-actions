@@ -10,6 +10,9 @@ const { getMainApplicationOrThrow, getMainActivityOrThrow } =
 // Import AdaptiveIcon type and withAndroidAppIcon from withAndroidAppIcon
 import { AdaptiveIcon, withAndroidAppIcon } from "./withAndroidAppIcon";
 
+/** Alias name for the default app icon. Must match ExpoAppIconModule.DEFAULT_ALIAS_SUFFIX in Kotlin. */
+export const DEFAULT_ALIAS_SUFFIX = "expo_ic_default";
+
 type Props = {
   icons: Record<string, string | AdaptiveIcon>;
 };
@@ -32,6 +35,26 @@ export const withAndroidDynamicAppIcons: ConfigPlugin<Props> = (
   return config;
 };
 
+const MAIN_LAUNCHER_INTENT_FILTER = {
+  action: [{ $: { "android:name": "android.intent.action.MAIN" } }],
+  category: [
+    { $: { "android:name": "android.intent.category.LAUNCHER" } },
+  ],
+};
+
+function isMainLauncherIntentFilter(filter: any): boolean {
+  const hasMain =
+    filter.action?.some(
+      (a: any) => a.$?.["android:name"] === "android.intent.action.MAIN"
+    ) === true;
+  const hasLauncher =
+    filter.category?.some(
+      (c: any) =>
+        c.$?.["android:name"] === "android.intent.category.LAUNCHER"
+    ) === true;
+  return hasMain && hasLauncher;
+}
+
 const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
   return withAndroidManifest(config, (config) => {
     const mainApplication: any = getMainApplicationOrThrow(config.modResults);
@@ -39,6 +62,32 @@ const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
 
     const iconNamePrefix = `${config.android!.package}.MainActivity`;
     const iconNames = Object.keys(icons);
+
+    // Remove MAIN/LAUNCHER from MainActivity so only our aliases are launcher entries.
+    // This allows the default to be an alias too, so we never disable the "real" activity.
+    const intentFilters = (mainActivity["intent-filter"] || []).filter(
+      (filter: any) => !isMainLauncherIntentFilter(filter)
+    );
+    mainActivity["intent-filter"] = intentFilters;
+
+    function createLauncherIntentFilter() {
+      return [MAIN_LAUNCHER_INTENT_FILTER];
+    }
+
+    function addDefaultAlias(config: any[]): any[] {
+      const defaultAlias = {
+        $: {
+          "android:name": `${iconNamePrefix}${DEFAULT_ALIAS_SUFFIX}`,
+          "android:enabled": "true",
+          "android:exported": "true",
+          "android:icon": "@mipmap/ic_launcher",
+          "android:roundIcon": "@mipmap/ic_launcher_round",
+          "android:targetActivity": ".MainActivity",
+        },
+        "intent-filter": createLauncherIntentFilter(),
+      };
+      return [defaultAlias, ...config];
+    }
 
     function addIconActivityAlias(config: any[]): any[] {
       return [
@@ -64,20 +113,7 @@ const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
 
           return {
             $: activityAliasAttributes,
-            "intent-filter": [
-              ...(mainActivity["intent-filter"] || [
-                {
-                  action: [
-                    { $: { "android:name": "android.intent.action.MAIN" } },
-                  ],
-                  category: [
-                    {
-                      $: { "android:name": "android.intent.category.LAUNCHER" },
-                    },
-                  ],
-                },
-              ]),
-            ],
+            "intent-filter": createLauncherIntentFilter(),
           };
         }),
       ];
@@ -92,12 +128,11 @@ const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
       );
     }
 
-    mainApplication["activity-alias"] = removeIconActivityAlias(
+    let activityAliases = removeIconActivityAlias(
       mainApplication["activity-alias"] || []
     );
-    mainApplication["activity-alias"] = addIconActivityAlias(
-      mainApplication["activity-alias"] || []
-    );
+    activityAliases = addDefaultAlias(activityAliases);
+    mainApplication["activity-alias"] = addIconActivityAlias(activityAliases);
 
     return config;
   });

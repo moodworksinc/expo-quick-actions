@@ -22,6 +22,7 @@ class ExpoAppIconReactActivityLifecycleListener : ReactActivityLifecycleListener
     companion object {
         private const val TAG = "ExpoAppIcon"
         private const val BACKGROUND_CHECK_DELAY = 500L
+        private const val MAIN_ACTIVITY_SUFFIX = ".MainActivity"
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -60,6 +61,11 @@ class ExpoAppIconReactActivityLifecycleListener : ReactActivityLifecycleListener
         }
     }
 
+    private fun isMainActivityComponent(componentName: String): Boolean {
+        return componentName.endsWith(MAIN_ACTIVITY_SUFFIX) &&
+            componentName == SharedObject.packageName + MAIN_ACTIVITY_SUFFIX
+    }
+
     private fun applyIconChange() {
         if (isChangingIcon) {
             Log.d(TAG, "Icon change already in progress; skipping")
@@ -85,8 +91,30 @@ class ExpoAppIconReactActivityLifecycleListener : ReactActivityLifecycleListener
             return
         }
 
+        // 1. Enable the new alias first.
+        try {
+            pm.setComponentEnabledSetting(
+                newComponent,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error enabling component: $currentIcon", e)
+            isChangingIcon = false
+            return
+        }
+
+        // 2. Verify the new alias is enabled before disabling the previous one.
+        val newState = pm.getComponentEnabledSetting(newComponent)
+        if (newState != PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
+            Log.e(TAG, "New icon component could not be enabled: $currentIcon. Not disabling previous.")
+            isChangingIcon = false
+            return
+        }
+
+        // 3. Safe to disable the previous alias(es). Never disable the main activity.
         SharedObject.classesToKill.forEach { componentName ->
-            if (componentName != currentIcon) {
+            if (componentName != currentIcon && !isMainActivityComponent(componentName)) {
                 try {
                     pm.setComponentEnabledSetting(
                         ComponentName(SharedObject.packageName, componentName),
@@ -100,18 +128,8 @@ class ExpoAppIconReactActivityLifecycleListener : ReactActivityLifecycleListener
         }
         SharedObject.classesToKill.clear()
 
-        try {
-            pm.setComponentEnabledSetting(
-                newComponent,
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                PackageManager.DONT_KILL_APP
-            )
-            Log.d(TAG, "Successfully changed app icon to: $currentIcon")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error enabling component: $currentIcon", e)
-        } finally {
-            isChangingIcon = false
-        }
+        Log.d(TAG, "Successfully changed app icon to: $currentIcon")
+        isChangingIcon = false
     }
 
     private fun doesComponentExist(component: ComponentName, pm: PackageManager): Boolean {

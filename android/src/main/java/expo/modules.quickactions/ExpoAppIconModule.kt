@@ -12,7 +12,13 @@ class ExpoAppIconModule : Module() {
     private const val TAG = "ExpoAppIcon"
     private const val MAIN_ACTIVITY_ALIAS = ".MainActivity"
     private const val ICON_PREFIX = "expo_ic_"
+    /** Must match DEFAULT_ALIAS_SUFFIX in withAndroidDynamicAppIcon.ts */
+    private const val DEFAULT_ALIAS_SUFFIX = "expo_ic_default"
   }
+
+  /** Full component name for the default icon alias (used so we never disable MainActivity). */
+  private val defaultAliasComponentName: String
+    get() = context.packageName + MAIN_ACTIVITY_ALIAS + DEFAULT_ALIAS_SUFFIX
 
   override fun definition() = ModuleDefinition {
     Name("ExpoAppIcon")
@@ -22,36 +28,60 @@ class ExpoAppIconModule : Module() {
     )
 
     Function("setIcon") { iconName: String? ->
-      val mainActivityAlias = context.packageName + MAIN_ACTIVITY_ALIAS
-      val currentIcon = if (SharedObject.icon.isNotEmpty()) SharedObject.icon else mainActivityAlias
+      val mainActivityFullName = context.packageName + MAIN_ACTIVITY_ALIAS
+      val currentIcon = if (SharedObject.icon.isNotEmpty()) SharedObject.icon else defaultAliasComponentName
 
       try {
-      if (iconName == null) {
-        disableIcon(currentIcon)
-        enableIcon(mainActivityAlias)
-        SharedObject.icon = ""
-        return@Function null
-      } else {
-        val newIcon = mainActivityAlias + ICON_PREFIX + iconName
-        SharedObject.packageName = context.packageName
-        SharedObject.pm = packageManager
+        if (iconName == null) {
+          // Reset to default: enable default alias, disable previous only if it was an alias (not MainActivity).
+          if (currentIcon != mainActivityFullName) {
+            disableIcon(currentIcon)
+          }
+          enableIcon(defaultAliasComponentName)
+          SharedObject.icon = ""
+          return@Function null
+        } else {
+          val newIcon = mainActivityFullName + ICON_PREFIX + iconName
+          SharedObject.packageName = context.packageName
+          SharedObject.pm = packageManager
 
-        enableIcon(newIcon)
-        disableIcon(currentIcon)
-        SharedObject.classesToKill.add(currentIcon)
-        SharedObject.icon = newIcon
+          // 1. Enable the new alias first (so we always have at least one valid launcher entry).
+          enableIcon(newIcon)
 
-        return@Function iconName
-      }
+          // 2. Verify the new alias exists and is enabled before disabling the previous one.
+          if (!doesComponentExist(ComponentName(context.packageName, newIcon), packageManager)) {
+            Log.e(TAG, "New icon component not found: $newIcon. Not disabling previous.")
+            return@Function iconName
+          }
+          val newState = packageManager.getComponentEnabledSetting(ComponentName(context.packageName, newIcon))
+          if (newState != PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
+            Log.e(TAG, "New icon component could not be enabled: $newIcon. Not disabling previous.")
+            return@Function iconName
+          }
+
+          // 3. Safe to disable the previous alias (currentIcon is always an alias now, never MainActivity).
+          if (currentIcon != mainActivityFullName) {
+            disableIcon(currentIcon)
+            SharedObject.classesToKill.add(currentIcon)
+          }
+          SharedObject.icon = newIcon
+
+          return@Function iconName
+        }
       } catch (e: Exception) {
-      return@Function false
+        Log.e(TAG, "setIcon failed", e)
+        return@Function false
       }
     }
 
     AsyncFunction("getIcon") {
-      val currentIcon = findEnabledAlias() ?: (context.packageName + MAIN_ACTIVITY_ALIAS)
-      val iconSuffix = currentIcon.substringAfter(MAIN_ACTIVITY_ALIAS, "Default")
-      return@AsyncFunction if (iconSuffix.isBlank()) "Default" else iconSuffix.removePrefix(ICON_PREFIX)
+      val currentIcon = findEnabledAlias() ?: defaultAliasComponentName
+      val iconSuffix = currentIcon.substringAfter(MAIN_ACTIVITY_ALIAS, "")
+      val name = if (iconSuffix.isBlank()) null else iconSuffix.removePrefix(ICON_PREFIX)
+      return@AsyncFunction when {
+        name == null || name == "default" -> null
+        else -> name
+      }
     }
   }
 
@@ -88,6 +118,19 @@ class ExpoAppIconModule : Module() {
     } catch (e: Exception) {
       Log.e(TAG, "Error getting current icon", e)
       null
+    }
+  }
+
+  private fun doesComponentExist(component: ComponentName, pm: PackageManager): Boolean {
+    return try {
+      val packageInfo = pm.getPackageInfo(
+        context.packageName,
+        PackageManager.GET_ACTIVITIES or PackageManager.GET_DISABLED_COMPONENTS
+      )
+      packageInfo.activities?.any { it.name == component.className } == true
+    } catch (e: Exception) {
+      Log.e(TAG, "Error checking component existence", e)
+      false
     }
   }
 }
